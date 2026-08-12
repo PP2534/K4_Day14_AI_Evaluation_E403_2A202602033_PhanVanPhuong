@@ -283,19 +283,19 @@ verbosity bias và self-preference bằng cách nào?
 Chỉ làm sau khi hoàn thành 3.1–3.3. Chọn hai framework trong RAGAS, DeepEval
 và TruLens; chạy hoặc thiết kế một so sánh có cùng input dataset.
 
-| Tiêu chí | Framework 1: ____ | Framework 2: ____ |
+| Tiêu chí | Framework 1: RAGAS | Framework 2: DeepEval |
 |---|---|---|
-| Setup complexity | | |
-| Metrics available | | |
-| CI/CD integration | | |
-| Kết quả trên cùng dataset | | |
-| Insight rút ra | | |
+| Setup complexity | Nặng hơn: kéo theo langchain/langchain-community, datasets, pandas; phải cấu hình riêng LLM (ChatOpenAI) và embeddings nếu dùng Context Recall/Precision; chạy offline qua `evaluate()` | Nhẹ hơn: pytest-native với `assert_test()`, cấu hình model một chỗ (OpenAI/OpenRouter), test case qua `LLMTestCase` |
+| Metrics available | RAG chuẩn hóa, LLM-based: Faithfulness, Answer Relevancy, Context Recall/Precision, Noise Sensitivity... | LLM unit-test đa dạng: Faithfulness, AnswerRelevancy, Contextual Precision/Recall, G-Eval, Bias, Toxicity... |
+| CI/CD integration | Tự tích hợp: script `evaluate()` → parse report → so ngưỡng | Trực tiếp: `assert_test(metric >= threshold)` trong pytest → fail build tự động |
+| Kết quả trên cùng dataset | Thiết kế: chạy trên cùng 20 answers, ngưỡng 0.5; baseline của lab là core heuristic (pass 45%, F 0.643 / R 0.649 / C 0.572 / CP 0.920 / CR 0.830) | Thiết kế: cùng 20 LLMTestCase, chấm bằng LLM judge qua OpenRouter, ngưỡng 0.5 |
+| Insight rút ra | LLM-judge đo ngữ nghĩa tốt hơn word-overlap heuristic — nhiều case core gán "off_topic" do lexical có thể thành pass | DeepEval gắn liền pytest nên dễ dùng làm quality gate; RAGAS mạnh hơn khi chẩn đoán retrieval-side |
 
 - Scores có nhất quán không?
 - Framework nào strict hơn và vì sao?
 - Hai framework có tìm ra cùng failure cases không?
 
-> *Phân tích:*
+> *Phân tích:* Scores giữa các framework không trùng tuyệt đối: core heuristic của lab là word-overlap deterministic (0–1), còn RAGAS/DeepEval dùng LLM judge (stochastic, dễ nhiễm leniency/severity bias) và định nghĩa metric khác nhau (vd RAGAS AnswerRelevancy sinh câu hỏi ngược rồi đo overlap, khác Relevance heuristic của lab). Xu hướng tương đối — case nào tốt/xấu — thường khớp hơn là số tuyệt đối. Về độ strict, core heuristic nghiêm khắc theo nghĩa lexical: nó trừ điểm khi câu trả lời đúng ý nhưng không trùng từ khóa (nguồn gốc hàng loạt case bị gán "off_topic" và Completeness 0.572); LLM judge thường dễ chịu hơn về diễn đạt nhưng nghiêm về claim không grounded. Với failure cases, những case lệch rõ (A01 hallucination, M05/A02 incomplete) hầu như framework nào cũng bắt được vì khác hẳn expected; case ranh giới chỉ thiếu một điều kiện (H01, H02) dễ có kết quả khác nhau tùy judge model và ngưỡng. Vì vậy nếu dùng framework LLM-based làm quality gate, cần calibrate ngưỡng với human labels thay vì chép nguyên ngưỡng của core heuristic.
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus +5)
 
@@ -310,20 +310,20 @@ thay đổi Context Recall hay không.
 
 | ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
 |---|---:|---:|---:|---:|---:|
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| **Avg** | | | | | |
+| M06 | 0.917 | 0.917 | 0.756 | 0.806 | +0.050 |
+| H02 | 0.968 | 0.968 | 0.917 | 1.000 | +0.083 |
+| H04 | 0.750 | 0.750 | 0.867 | 1.000 | +0.133 |
+| E05 | 1.000 | 1.000 | 0.917 | 0.917 | 0.000 |
+| H01 | 0.806 | 0.806 | 1.000 | 0.950 | -0.050 |
+| **Avg** | 0.888 | 0.888 | 0.891 | 0.935 | +0.043 |
 
 **Tại sao Recall dự kiến không đổi?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Rerank chỉ đổi **thứ tự** các chunk, không thêm hoặc xóa chunk nào, nên **union các chunk giữ nguyên** — mà Context Recall đo coverage của union lên expected → Recall bất biến. Số liệu xác nhận: `Recall before` bằng `Recall after` ở mọi case (cả 5 case chọn lẫn toàn bộ 20 case, AVG 0.830 = 0.830).
 
 **Khi nào reranking không đủ và cần sửa retriever/query/chunking?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Rerank không thể thêm evidence bị thiếu: khi retriever bỏ lỡ chunk quan trọng (recall thấp — M05 = 0.387, A01 = 0.077), đổi thứ tự cũng vô ích. Rerank cũng thất bại khi overlap lexical không phản ánh đúng mức độ liên quan về ngữ nghĩa — bằng chứng là H01 precision **giảm** 0.05 sau rerank. Khi đó cần sửa retriever/query/chunking: tăng top_k, bổ sung synonyms, dùng cross-encoder reranker, hoặc chỉnh cách chunk để giảm noise.
 
 ---
 
@@ -337,11 +337,11 @@ Hoàn thành `reflection.md` bằng kết quả thật từ Exercise 3.2.
 
 Hoàn thành kiểm tra cuối trong khoảng 16:50–17:00.
 
-- [ ] Tất cả required tests pass.
-- [ ] `golden_dataset.json` validate thành công.
-- [ ] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
-- [ ] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
-- [ ] Exercise 3.3 có rubric 1–5 và bias controls.
-- [ ] `reflection.md` có ba failure analyses và regression strategy.
-- [ ] Đã copy `template.py` thành `solution/solution.py`.
-- [ ] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
+- [x] Tất cả required tests pass.
+- [x] `golden_dataset.json` validate thành công.
+- [x] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
+- [x] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
+- [x] Exercise 3.3 có rubric 1–5 và bias controls.
+- [x] `reflection.md` có ba failure analyses và regression strategy.
+- [x] Đã copy `template.py` thành `solution/solution.py`.
+- [x] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
